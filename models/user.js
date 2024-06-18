@@ -34,6 +34,10 @@ const userSchema = new mongoose.Schema({
     isPayment:{
         type:Boolean,
         default:false
+    },
+    isBlock:{
+        type:Boolean,
+        default:false
     }
 })
 const user = mongoose.model("user",userSchema);

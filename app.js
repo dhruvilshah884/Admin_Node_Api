@@ -6,11 +6,11 @@ const User = require("./models/user");
 const Admin = require("./models/admin");
 const multer = require("multer");
 const session = require("express-session");
+const MongoStore = require("connect-mongo");
 const stripe = require("stripe")(
   "sk_test_51ONZYOSAJLtohZuHS2V3Qc2dexwtqMVBLEq3J0kVpIGoREaoVCHtDyihllEZEza3vL3XlWfLBNCHauNycXnAMTu000SGNO2iam"
 );
 const cors = require("cors");
-const MongoStore = require("connect-mongo");
 
 app.use(
   cors({
@@ -30,16 +30,25 @@ app.use(
   session({
     secret: "keyboard cat",
     resave: false,
-    secure: true,
     saveUninitialized: true,
-    cookie: { secure: false },
     store: MongoStore.create({
       mongoUrl: "mongodb://127.0.0.1:27017/react-node",
-      ttl: 24 * 60 * 60,
+      ttl: 24 * 60 * 60, // 1 day in seconds
     }),
+    cookie: {
+      maxAge: 1000 * 60 * 60 * 24, // 1 day in milliseconds
+      secure: false, // Set to true if using HTTPS
+      httpOnly: true,
+    },
   })
 );
-
+function noCache(req, res, next) {
+  res.header("Cache-Control", "private, no-cache, no-store, must-revalidate");
+  res.header("Expires", "-1");
+  res.header("Pragma", "no-cache");
+  next();
+}
+app.use(noCache);
 // Set up storage for uploaded files
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -52,6 +61,19 @@ const storage = multer.diskStorage({
 
 // Create the multer instance
 const upload = multer({ storage: storage });
+const isAdmin = (req, res, next) => {
+  if (req.session.user && req.session.user.role === "admin") {
+    // User is authenticated and is admin, allow access
+    next();
+  } else if (req.session.user && req.session.user.role === "user") {
+    // User is authenticated but is not admin, redirect to login
+    res.redirect('/login');
+  } else {
+    // User is not authenticated, deny access
+    res.status(403).json({ message: "Access denied" });
+  }
+};
+
 
 app.get("/", (req, res) => {
   res.status(201).json({ message: "Hello from backend API" });
@@ -59,7 +81,7 @@ app.get("/", (req, res) => {
 
 app.post("/signup", async (req, res) => {
   let { name, email, password, role } = req.body;
-  role = role ? "admin" : "user"; // Default role if not admin
+  role = role ? "admin" : "user";
 
   const token = jwt.sign({ email }, "sjkvdbaskjdvakjs", { expiresIn: "1h" });
   const user = new User({ name, email, password, role, token });
@@ -95,6 +117,70 @@ app.post("/add", upload.single("image"), async (req, res) => {
     res.status(401).json({ message: error.message });
   }
 });
+app.get("/admin" ,async (req, res) => {
+  try {
+    const admin = await Admin.find({});
+    // const user = await User.find({})
+
+    res.status(200).json(admin);
+  } catch (error) {
+    res.status(500).json({ message: "Internal server error", error });
+  }
+});
+app.delete("/admin/:id", async (req, res) => {
+  try {
+    let id = req.params.id;
+    let data = await Admin.findByIdAndDelete(id);
+    if (!data) {
+      return res.status(404).json({ message: "Item not found" });
+    }
+    res.status(200).json({ message: "Item deleted successfully", data });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+app.get("/admin/:id", async (req, res) => {
+  try {
+    let id = req.params.id;
+    const data = await Admin.findById(id);
+    res.status(201).json(data);
+  } catch (error) {
+    console.log(error);
+  }
+});
+// Backend route for updating a product
+app.put("/admin/:id", upload.single("product_image"), async (req, res) => {
+  const { id } = req.params;
+  const { product_name, product_price } = req.body;
+
+  try {
+    let updateData = {};
+    if (req.file) {
+      updateData = {
+        product_name,
+        product_price,
+        product_image: req.file.filename,
+      };
+    } else {
+      updateData = {
+        product_name,
+        product_price,
+      };
+    }
+
+    const updatedProduct = await Admin.findByIdAndUpdate(id, updateData, {
+      new: true,
+    });
+
+    if (!updatedProduct) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    res.status(200).json(updatedProduct);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
 
 app.get("/user", async (req, res) => {
   try {
@@ -106,6 +192,58 @@ app.get("/user", async (req, res) => {
     const users = await Admin.find({});
     res.status(200).json(users);
   } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+app.get("/userData", async (req, res) => {
+  try {
+    const users = await User.find({ role: { $ne: "admin" } }).populate(
+      "cart.product",
+      "product_name product_price product_image"
+    );
+    console.log(users);
+    res.status(200).json(users);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+app.delete("/userData/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const user = await User.findByIdAndDelete(id);
+    res.status(201).json(user);
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ message: error.message });
+  }
+});
+app.post("/Userblock/:id", async (req, res) => {
+  try {
+    let id = req.params.id;
+    let model = await User.findByIdAndUpdate(
+      id,
+      { isBlock: true },
+      { new: true }
+    );
+    res.status(200).json({ message: "User Blocked Successfully", user: model });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ message: error.message });
+  }
+});
+app.post("/unblock/:id", async (req, res) => {
+  try {
+    let id = req.params.id;
+    let model = await User.findByIdAndUpdate(
+      id,
+      { isBlock: false },
+      { new: true }
+    );
+    res
+      .status(200)
+      .json({ message: "User unblocked Successfully", user: model });
+  } catch (error) {
+    console.log(error);
     res.status(500).json({ message: error.message });
   }
 });
@@ -200,9 +338,8 @@ app.post("/decrement", async (req, res) => {
 app.post("/remove", async (req, res) => {
   try {
     const { productId } = req.body;
-    const userId = req.session.user._id; // Assuming you use sessions for authentication
+    const userId = req.session.user._id;
 
-    // Find the user by ID and update the cart
     const user = await User.findById(userId);
 
     if (!user) {
@@ -245,7 +382,7 @@ app.post("/payment-process", async (req, res) => {
         },
       ],
       mode: "payment",
-      success_url: "http://localhost:5000/success", 
+      success_url: "http://localhost:5000/success",
       cancel_url: "http://localhost:3000/cancel",
       customer_email: userEmail,
     });
@@ -257,24 +394,22 @@ app.post("/payment-process", async (req, res) => {
   }
 });
 
-
 // GET endpoint to handle successful payment
-app.get('/success',async(req,res)=>{
-  try{
-    let user = await User.findById(req.session.user._id)
-    if(!user){
-      res.status(401).json({message:"user not found please login first"})
-      console.log('user not found ')
+app.get("/success", async (req, res) => {
+  try {
+    let user = await User.findById(req.session.user._id);
+    if (!user) {
+      res.status(401).json({ message: "user not found please login first" });
+      console.log("user not found ");
     }
-    user.isPayment = true
-    user.cart = []
-    await user.save()
-     res.redirect('http://localhost:3000/success')
-  }catch(error){
-    console.log(error)
+    user.isPayment = true;
+    user.cart = [];
+    await user.save();
+    res.redirect("http://localhost:3000/success");
+  } catch (error) {
+    console.log(error);
   }
-})
-
+});
 
 app.get("/cancel", (req, res) => {
   res.send("payment unsuccessful");
@@ -282,11 +417,10 @@ app.get("/cancel", (req, res) => {
 app.post("/logout", (req, res) => {
   req.session.destroy((err) => {
     if (err) {
-      res.status(401).json({ message: "logout cannot be performed " });
-    } else {
-      res.clearCookie("connect.sid");
-      res.status(201).json({ message: "logout successfully please login" });
+      return res.status(500).json({ message: "Logout failed" });
     }
+    res.clearCookie("connect.sid", { path: "/" });
+    res.status(200).json({ message: "Logout successful" });
   });
 });
 
